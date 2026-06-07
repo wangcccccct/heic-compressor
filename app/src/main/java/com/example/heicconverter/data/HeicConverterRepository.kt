@@ -61,9 +61,9 @@ class HeicConverterRepository(private val context: Context) {
   suspend fun resolveInputs(uris: List<Uri>, source: EntrySource): List<InputImage> =
     withContext(Dispatchers.IO) {
       uris.distinctBy { it.toString() }.map { uri ->
-        val mimeType = contentResolver.getType(uri).orEmpty()
         val metadata = queryInputMetadata(uri)
         val displayName = metadata.displayName ?: "shared-${System.currentTimeMillis()}.jpg"
+        val mimeType = resolveMimeType(uri, displayName)
         val isAlreadyHeic = mimeType.contains("heic", ignoreCase = true) || mimeType.contains("heif", ignoreCase = true)
         val isSupported = mimeType.lowercase() in supportedMimeTypes
         val panoramaHint = detectPanoramaHint(uri, metadata.width, metadata.height)
@@ -71,7 +71,7 @@ class HeicConverterRepository(private val context: Context) {
           when {
             isAlreadyHeic -> "这张图已经是 HEIC/HEIF。"
             mimeType.isBlank() -> "无法识别图片类型。"
-            !isSupported -> "暂不支持 $mimeType。首版支持 JPG / PNG / WebP / BMP。"
+            !isSupported -> "暂不支持 $mimeType。当前支持 JPG / PNG / WebP / BMP。"
             else -> null
           }
         InputImage(
@@ -303,7 +303,7 @@ class HeicConverterRepository(private val context: Context) {
         MediaStore.MediaColumns.RELATIVE_PATH,
         MediaStore.Images.Media.DATE_TAKEN,
       )
-    return contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
+    val queried = contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
       if (!cursor.moveToFirst()) return@use SourceMetadata()
       SourceMetadata(
         displayName = cursor.getStringOrNull(0),
@@ -313,7 +313,35 @@ class HeicConverterRepository(private val context: Context) {
         relativePath = cursor.getStringOrNull(4),
         dateTaken = cursor.getLongOrNull(5),
       )
-    } ?: SourceMetadata().copy(width = readBounds(uri).first, height = readBounds(uri).second)
+    } ?: SourceMetadata()
+
+    if (queried.width != null && queried.height != null) return queried
+
+    val bounds = readBounds(uri)
+    return queried.copy(
+      width = queried.width ?: bounds.first,
+      height = queried.height ?: bounds.second,
+    )
+  }
+
+  private fun resolveMimeType(uri: Uri, displayName: String): String {
+    val resolverType = contentResolver.getType(uri)?.lowercase().orEmpty()
+    if (resolverType.isNotBlank() && resolverType !in genericMimeTypes) return resolverType
+
+    val extension =
+      displayName.substringAfterLast('.', missingDelimiterValue = "")
+        .ifBlank { uri.lastPathSegment?.substringAfterLast('.', missingDelimiterValue = "").orEmpty() }
+        .lowercase()
+
+    return when (extension) {
+      "jpg", "jpeg" -> "image/jpeg"
+      "png" -> "image/png"
+      "webp" -> "image/webp"
+      "bmp" -> "image/bmp"
+      "heic" -> "image/heic"
+      "heif" -> "image/heif"
+      else -> resolverType
+    }
   }
 
   private fun readBounds(uri: Uri): Pair<Int?, Int?> {
@@ -393,6 +421,8 @@ class HeicConverterRepository(private val context: Context) {
 
   companion object {
     private const val XMP_SCAN_LIMIT_BYTES = 256 * 1024
+
+    private val genericMimeTypes = setOf("application/octet-stream", "image/*")
 
     private val exifKeys =
       listOf(
