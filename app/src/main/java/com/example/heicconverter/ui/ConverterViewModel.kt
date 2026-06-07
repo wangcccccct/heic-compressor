@@ -9,6 +9,7 @@ import com.example.heicconverter.data.HeicConverterRepository
 import com.example.heicconverter.model.AppScreen
 import com.example.heicconverter.model.ConversionItemResult
 import com.example.heicconverter.model.ConverterUiState
+import com.example.heicconverter.model.EncoderCapability
 import com.example.heicconverter.model.EntrySource
 import com.example.heicconverter.model.PreviewUiState
 import com.example.heicconverter.model.UiMessage
@@ -93,6 +94,22 @@ class ConverterViewModel(application: Application) : AndroidViewModel(applicatio
   }
 
   fun openPreview(input: com.example.heicconverter.model.InputImage) {
+    if (!input.isSupported) {
+      postMessage(input.supportMessage ?: "这张图片暂不支持转换。")
+      return
+    }
+    when (val capability = _uiState.value.encoderCapability) {
+      EncoderCapability.Checking -> {
+        postMessage("正在检测设备 HEIC 编码能力，请稍后再预览。")
+        return
+      }
+      is EncoderCapability.Unsupported -> {
+        postMessage(capability.message)
+        return
+      }
+      EncoderCapability.Supported -> Unit
+    }
+
     previewJob?.cancel()
     val sourceScreen = _uiState.value.screen
     _uiState.update {
@@ -163,6 +180,18 @@ class ConverterViewModel(application: Application) : AndroidViewModel(applicatio
   }
 
   fun startConversion() {
+    when (val capability = _uiState.value.encoderCapability) {
+      EncoderCapability.Checking -> {
+        postMessage("正在检测设备 HEIC 编码能力，请稍后再开始。")
+        return
+      }
+      is EncoderCapability.Unsupported -> {
+        postMessage(capability.message)
+        return
+      }
+      EncoderCapability.Supported -> Unit
+    }
+
     val images = _uiState.value.selectedImages
     if (images.isEmpty()) {
       postMessage("先选几张图片再开始。")

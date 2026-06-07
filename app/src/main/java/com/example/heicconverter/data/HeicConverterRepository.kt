@@ -39,17 +39,24 @@ class HeicConverterRepository(private val context: Context) {
 
   suspend fun detectEncoderCapability(): EncoderCapability =
     withContext(Dispatchers.Default) {
-      val supportsHeif =
+      runCatching {
         MediaCodecList(MediaCodecList.ALL_CODECS).codecInfos.any { codecInfo ->
           codecInfo.isEncoder && codecInfo.supportedTypes.any { type -> heifMimeCandidates.any { candidate -> candidate.equals(type, ignoreCase = true) } }
         }
-
-      if (supportsHeif) {
-        EncoderCapability.Supported
-      } else {
-        EncoderCapability.Unsupported("当前系统没有公开可用的 HEIC 编码器。")
       }
-    }
+        .fold(
+          onSuccess = { supportsHeif ->
+            if (supportsHeif) {
+              EncoderCapability.Supported
+            } else {
+              EncoderCapability.Unsupported("当前系统没有公开可用的 HEIC 编码器，已禁用转换。")
+            }
+          },
+          onFailure = {
+            EncoderCapability.Unsupported("无法确认当前系统的 HEIC 编码能力，已禁用转换。")
+          },
+        )
+      }
 
   suspend fun resolveInputs(uris: List<Uri>, source: EntrySource): List<InputImage> =
     withContext(Dispatchers.IO) {

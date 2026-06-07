@@ -418,7 +418,11 @@ private fun ConfigureScreen(
                     leadingIcon = { Icon(Icons.Rounded.Panorama, contentDescription = null) },
                   )
                 }
-                Text("点按生成预览", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                Text(
+                  if (image.isSupported) "点按生成预览" else "不支持转换",
+                  style = MaterialTheme.typography.labelSmall,
+                  color = if (image.isSupported) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                )
               }
             }
           }
@@ -483,14 +487,16 @@ private fun ConfigureScreen(
 
     item {
       val capability = uiState.encoderCapability
-      val disabled = capability is EncoderCapability.Unsupported || !canConvertAny
-      if (capability is EncoderCapability.Unsupported) {
-        Text(capability.message, color = MaterialTheme.colorScheme.error)
+      val disabled = capability !is EncoderCapability.Supported || !canConvertAny
+      when (capability) {
+        EncoderCapability.Checking -> Text("正在检测设备 HEIC 编码能力，完成后即可开始。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        is EncoderCapability.Unsupported -> Text(capability.message, color = MaterialTheme.colorScheme.error)
+        EncoderCapability.Supported -> Unit
       }
       Button(onClick = onStartConversion, enabled = !disabled, modifier = Modifier.fillMaxWidth().height(58.dp), shape = RoundedCornerShape(24.dp)) {
         Icon(Icons.Rounded.Bolt, contentDescription = null)
         Spacer(Modifier.width(12.dp))
-        Text("开始转换")
+        Text(if (capability is EncoderCapability.Checking) "检测编码器中…" else "开始转换")
       }
     }
   }
