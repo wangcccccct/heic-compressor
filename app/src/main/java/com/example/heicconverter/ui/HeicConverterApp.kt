@@ -155,6 +155,7 @@ fun HeicConverterRoute(viewModel: ConverterViewModel) {
     },
     onBackHome = viewModel::backToHome,
     onSaveAll = viewModel::saveAll,
+    onSaveSmaller = viewModel::saveSmallerResults,
     onSaveOne = viewModel::saveOne,
     onShareOne = { result -> result.output?.shareUri?.let { shareFiles(context, listOf(it), true) } },
     onShareAll = {
@@ -185,6 +186,7 @@ private fun HeicConverterScreen(
   onBack: () -> Unit,
   onBackHome: () -> Unit,
   onSaveAll: () -> Unit,
+  onSaveSmaller: () -> Unit,
   onSaveOne: (ConversionItemResult.Success) -> Unit,
   onShareOne: (ConversionItemResult.Success) -> Unit,
   onShareAll: () -> Unit,
@@ -236,7 +238,7 @@ private fun HeicConverterScreen(
             onOpenPreview = onOpenPreview,
           )
         AppScreen.CONVERTING -> ConvertingScreen(uiState, onCancelConversion)
-        AppScreen.RESULTS -> ResultsScreen(uiState, onShareAll, onSaveAll, onBackHome, onShareOne, onSaveOne, onOpenResultPreview)
+        AppScreen.RESULTS -> ResultsScreen(uiState, onShareAll, onSaveAll, onSaveSmaller, onBackHome, onShareOne, onSaveOne, onOpenResultPreview)
         AppScreen.PREVIEW -> PreviewScreen(uiState.previewState, uiState.settings, onClosePreview)
       }
     }
@@ -529,9 +531,13 @@ private fun ConvertingScreen(uiState: ConverterUiState, onCancelConversion: () -
     Surface(color = MaterialTheme.colorScheme.surfaceContainerHighest, shape = RoundedCornerShape(30.dp)) {
       Column(modifier = Modifier.fillMaxWidth().padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Text("正在压缩为 HEIC", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-        Text(uiState.progress.currentLabel ?: "准备中", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("当前：${uiState.progress.currentLabel ?: "准备中"}", color = MaterialTheme.colorScheme.onSurfaceVariant)
         LinearProgressIndicator(progress = { progressValue.coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth().height(8.dp).clip(CircleShape))
         Text("${uiState.progress.completed} / ${uiState.progress.total}", style = MaterialTheme.typography.titleLarge)
+        Text(
+          "成功 ${uiState.progress.successCount} · 跳过/失败 ${uiState.progress.failureCount} · 剩余 ${(uiState.progress.total - uiState.progress.completed).coerceAtLeast(0)}",
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
       }
     }
 
@@ -546,12 +552,14 @@ private fun ResultsScreen(
   uiState: ConverterUiState,
   onShareAll: () -> Unit,
   onSaveAll: () -> Unit,
+  onSaveSmaller: () -> Unit,
   onBackHome: () -> Unit,
   onShareOne: (ConversionItemResult.Success) -> Unit,
   onSaveOne: (ConversionItemResult.Success) -> Unit,
   onOpenPreview: (ConversionItemResult.Success) -> Unit,
 ) {
   val shareableCount = uiState.successResults.count { it.output != null }
+  val smallerCount = uiState.successResults.count { it.output != null && it.originalBytes != null && it.outputBytes < it.originalBytes }
   LazyColumn(
     modifier = Modifier.fillMaxSize(),
     contentPadding = PaddingValues(20.dp),
@@ -579,6 +587,13 @@ private fun ResultsScreen(
     item {
       FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         if (shareableCount > 0) {
+          if (smallerCount > 0) {
+            FilledTonalButton(onClick = onSaveSmaller, shape = RoundedCornerShape(20.dp)) {
+              Icon(Icons.Rounded.SaveAlt, contentDescription = null)
+              Spacer(Modifier.width(10.dp))
+              Text("只保存更小结果（$smallerCount）")
+            }
+          }
           FilledTonalButton(onClick = onSaveAll, shape = RoundedCornerShape(20.dp)) {
             Icon(Icons.Rounded.SaveAlt, contentDescription = null)
             Spacer(Modifier.width(10.dp))

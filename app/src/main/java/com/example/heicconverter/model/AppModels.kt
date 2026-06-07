@@ -45,6 +45,8 @@ data class ConversionProgress(
   val completed: Int = 0,
   val total: Int = 0,
   val currentLabel: String? = null,
+  val successCount: Int = 0,
+  val failureCount: Int = 0,
 )
 
 sealed interface EncoderCapability {

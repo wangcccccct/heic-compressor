@@ -204,7 +204,14 @@ class ConverterViewModel(application: Application) : AndroidViewModel(applicatio
         _uiState.update {
           it.copy(
             screen = AppScreen.CONVERTING,
-            progress = it.progress.copy(completed = 0, total = images.size, currentLabel = images.firstOrNull()?.displayName),
+            progress =
+              it.progress.copy(
+                completed = 0,
+                total = images.size,
+                currentLabel = images.firstOrNull()?.displayName,
+                successCount = 0,
+                failureCount = 0,
+              ),
             results = emptyList(),
             previewState = null,
           )
@@ -214,8 +221,19 @@ class ConverterViewModel(application: Application) : AndroidViewModel(applicatio
           repository.convert(
             items = images,
             settings = _uiState.value.settings,
-            onProgress = { completed, total, currentLabel ->
-              _uiState.update { state -> state.copy(progress = state.progress.copy(completed = completed, total = total, currentLabel = currentLabel)) }
+            onProgress = { completed, total, currentLabel, successCount, failureCount ->
+              _uiState.update { state ->
+                state.copy(
+                  progress =
+                    state.progress.copy(
+                      completed = completed,
+                      total = total,
+                      currentLabel = currentLabel,
+                      successCount = successCount,
+                      failureCount = failureCount,
+                    ),
+                )
+              }
             },
           )
         }
@@ -228,7 +246,14 @@ class ConverterViewModel(application: Application) : AndroidViewModel(applicatio
                 screen = AppScreen.RESULTS,
                 results = results,
                 recentSummary = summary ?: it.recentSummary,
-                progress = it.progress.copy(completed = results.size, total = results.size, currentLabel = "已完成"),
+                progress =
+                  it.progress.copy(
+                    completed = results.size,
+                    total = results.size,
+                    currentLabel = "已完成",
+                    successCount = successCount,
+                    failureCount = failureCount,
+                  ),
                 pendingMessage =
                   UiMessage(
                     text =
@@ -277,9 +302,20 @@ class ConverterViewModel(application: Application) : AndroidViewModel(applicatio
   }
 
   fun saveAll() {
-    val successItems = _uiState.value.successResults.filter { it.output != null }
+    saveResults(_uiState.value.successResults.filter { it.output != null }, emptyMessage = "没有可保存的结果。")
+  }
+
+  fun saveSmallerResults() {
+    val smallerResults =
+      _uiState.value.successResults.filter {
+        it.output != null && it.originalBytes != null && it.outputBytes < it.originalBytes
+      }
+    saveResults(smallerResults, emptyMessage = "没有比原图更小的可保存结果。")
+  }
+
+  private fun saveResults(successItems: List<ConversionItemResult.Success>, emptyMessage: String) {
     if (successItems.isEmpty()) {
-      postMessage("没有可保存的结果。")
+      postMessage(emptyMessage)
       return
     }
     viewModelScope.launch {
@@ -298,7 +334,7 @@ class ConverterViewModel(application: Application) : AndroidViewModel(applicatio
                     } else {
                       it
                     }
-                },
+                  },
               )
             }
           }
@@ -324,7 +360,7 @@ class ConverterViewModel(application: Application) : AndroidViewModel(applicatio
         selectedImages = emptyList(),
         results = emptyList(),
         previewState = null,
-        progress = it.progress.copy(completed = 0, total = 0, currentLabel = null),
+        progress = it.progress.copy(completed = 0, total = 0, currentLabel = null, successCount = 0, failureCount = 0),
       )
     }
   }

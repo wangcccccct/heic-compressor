@@ -107,13 +107,19 @@ class HeicConverterRepository(private val context: Context) {
   suspend fun convert(
     items: List<InputImage>,
     settings: ConversionSettings,
-    onProgress: suspend (completed: Int, total: Int, currentLabel: String) -> Unit,
+    onProgress: suspend (completed: Int, total: Int, currentLabel: String, successCount: Int, failureCount: Int) -> Unit,
   ): List<ConversionItemResult> = withContext(Dispatchers.IO) {
     val results = mutableListOf<ConversionItemResult>()
     items.forEachIndexed { index, item ->
       ensureActive()
-      onProgress(index, items.size, item.displayName)
-      results +=
+      onProgress(
+        index,
+        items.size,
+        item.displayName,
+        results.count { it is ConversionItemResult.Success },
+        results.count { it is ConversionItemResult.Failure },
+      )
+      val result =
         if (!item.isSupported) {
           ConversionItemResult.Failure(item, item.supportMessage ?: "不支持的输入")
         } else if (settings.skipPanoramaLike && item.isPanoramaLike) {
@@ -124,8 +130,15 @@ class HeicConverterRepository(private val context: Context) {
               ConversionItemResult.Failure(item, throwable.message ?: "转换失败")
             }
         }
+      results += result
+      onProgress(
+        index + 1,
+        items.size,
+        items.getOrNull(index + 1)?.displayName ?: "已完成",
+        results.count { it is ConversionItemResult.Success },
+        results.count { it is ConversionItemResult.Failure },
+      )
     }
-    onProgress(items.size, items.size, "已完成")
     results
   }
 
