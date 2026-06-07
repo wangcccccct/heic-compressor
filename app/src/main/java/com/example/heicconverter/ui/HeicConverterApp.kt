@@ -1,9 +1,13 @@
 package com.example.heicconverter.ui
 
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
+import android.provider.MediaStore
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
@@ -120,12 +124,35 @@ fun HeicConverterRoute(viewModel: ConverterViewModel) {
     rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { uris ->
       if (uris.isNotEmpty()) viewModel.importUris(uris, EntrySource.LOCAL_PICKER)
     }
+  val trashLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
+      viewModel.onTrashRequestResult(result.resultCode == Activity.RESULT_OK)
+    }
 
   val pendingMessage = uiState.pendingMessage
   LaunchedEffect(pendingMessage?.id) {
     pendingMessage?.let {
       snackbarHostState.showSnackbar(it.text)
       viewModel.clearMessage(it)
+    }
+  }
+  val pendingTrashRequest = uiState.pendingTrashRequest
+  LaunchedEffect(pendingTrashRequest?.id) {
+    pendingTrashRequest?.let { request ->
+      viewModel.clearTrashRequest(request)
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        runCatching {
+          MediaStore.createTrashRequest(context.contentResolver, request.uris, true)
+        }
+          .onSuccess { pendingIntent ->
+            trashLauncher.launch(IntentSenderRequest.Builder(pendingIntent.intentSender).build())
+          }
+          .onFailure {
+            viewModel.onTrashRequestResult(approved = false)
+          }
+      } else {
+        viewModel.onTrashRequestResult(approved = false)
+      }
     }
   }
 
@@ -459,7 +486,7 @@ private fun ConfigureScreen(
           )
           SettingSwitchRow(
             title = "替换原图（实验性）",
-            body = "成功后尝试在同相册位置创建 HEIC，并删除原图。系统权限不足时会只保留新 HEIC。",
+            body = "成功后先创建 HEIC；Android 11+ 会请求系统确认将原图移入回收站。",
             checked = uiState.settings.replaceOriginals,
             onCheckedChange = onReplaceOriginalsChange,
           )

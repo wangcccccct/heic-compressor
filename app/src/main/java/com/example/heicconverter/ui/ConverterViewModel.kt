@@ -12,6 +12,8 @@ import com.example.heicconverter.model.ConverterUiState
 import com.example.heicconverter.model.EncoderCapability
 import com.example.heicconverter.model.EntrySource
 import com.example.heicconverter.model.PreviewUiState
+import com.example.heicconverter.model.ReplacementStatus
+import com.example.heicconverter.model.TrashRequest
 import com.example.heicconverter.model.UiMessage
 import com.example.heicconverter.share.IncomingShareParser
 import com.example.heicconverter.util.summarize
@@ -242,10 +244,17 @@ class ConverterViewModel(application: Application) : AndroidViewModel(applicatio
             val successCount = results.count { it is ConversionItemResult.Success }
             val failureCount = results.count { it is ConversionItemResult.Failure }
             _uiState.update {
+              val trashUris =
+                results
+                  .filterIsInstance<ConversionItemResult.Success>()
+                  .filter { result -> result.replacementStatus == ReplacementStatus.PENDING_TRASH }
+                  .map { result -> result.input.uri }
+                  .distinctBy { uri -> uri.toString() }
               it.copy(
                 screen = AppScreen.RESULTS,
                 results = results,
                 recentSummary = summary ?: it.recentSummary,
+                pendingTrashRequest = trashUris.takeIf { uris -> uris.isNotEmpty() }?.let { uris -> TrashRequest(uris = uris) },
                 progress =
                   it.progress.copy(
                     completed = results.size,
@@ -259,6 +268,7 @@ class ConverterViewModel(application: Application) : AndroidViewModel(applicatio
                     text =
                       when {
                         summary == null -> "本轮没有生成可分享的 HEIC 文件。"
+                        trashUris.isNotEmpty() -> "转换完成，成功 ${successCount} 张；请确认系统回收站请求。"
                         failureCount == 0 -> "转换完成，成功 ${successCount} 张。"
                         else -> "转换完成：成功 ${successCount}，跳过/失败 ${failureCount}。"
                       },
@@ -303,6 +313,39 @@ class ConverterViewModel(application: Application) : AndroidViewModel(applicatio
 
   fun saveAll() {
     saveResults(_uiState.value.successResults.filter { it.output != null }, emptyMessage = "没有可保存的结果。")
+  }
+
+  fun clearTrashRequest(request: TrashRequest) {
+    _uiState.update { state -> if (state.pendingTrashRequest?.id == request.id) state.copy(pendingTrashRequest = null) else state }
+  }
+
+  fun onTrashRequestResult(approved: Boolean) {
+    _uiState.update { state ->
+      val updatedResults =
+        if (approved) {
+          state.results.map { result ->
+            if (result is ConversionItemResult.Success && result.replacementStatus == ReplacementStatus.PENDING_TRASH) {
+              result.copy(replacementStatus = ReplacementStatus.TRASHED, replacementMessage = "已通过系统回收站移走原图。")
+            } else {
+              result
+            }
+          }
+        } else {
+          state.results
+        }
+      state.copy(
+        results = updatedResults,
+        pendingMessage =
+          UiMessage(
+            text =
+              if (approved) {
+                "系统已确认，原图已移入回收站。"
+              } else {
+                "已取消系统回收站请求，原图仍保留。"
+              },
+          ),
+      )
+    }
   }
 
   fun saveSmallerResults() {

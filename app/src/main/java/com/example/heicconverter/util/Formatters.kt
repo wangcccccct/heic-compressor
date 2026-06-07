@@ -70,6 +70,8 @@ fun formatReplacementStatus(status: ReplacementStatus, message: String?): String
     ReplacementStatus.NOT_REQUESTED -> null
     ReplacementStatus.REPLACED -> "已替换原图。"
     ReplacementStatus.CREATED_COPY_ONLY -> "已生成 HEIC，但原图仍保留。"
+    ReplacementStatus.PENDING_TRASH -> "已生成 HEIC，等待系统确认将原图移入回收站。"
+    ReplacementStatus.TRASHED -> "已生成 HEIC，原图已移入系统回收站。"
     ReplacementStatus.SKIPPED_LARGER -> "按设置未替换原图。"
   }
 }

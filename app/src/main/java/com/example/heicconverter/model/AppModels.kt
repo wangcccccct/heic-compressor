@@ -67,6 +67,8 @@ enum class ReplacementStatus {
   NOT_REQUESTED,
   REPLACED,
   CREATED_COPY_ONLY,
+  PENDING_TRASH,
+  TRASHED,
   SKIPPED_LARGER,
 }
 
@@ -111,6 +113,11 @@ data class UiMessage(
   val text: String,
 )
 
+data class TrashRequest(
+  val id: Long = System.currentTimeMillis(),
+  val uris: List<Uri>,
+)
+
 data class PreviewComparison(
   val input: InputImage,
   val outputFile: File,
@@ -136,6 +143,7 @@ data class ConverterUiState(
   val previewState: PreviewUiState? = null,
   val recentSummary: SessionSummary? = null,
   val pendingMessage: UiMessage? = null,
+  val pendingTrashRequest: TrashRequest? = null,
 ) {
   val successResults: List<ConversionItemResult.Success>
     get() = results.filterIsInstance<ConversionItemResult.Success>()

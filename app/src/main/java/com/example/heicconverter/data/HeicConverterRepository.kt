@@ -8,6 +8,7 @@ import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
 import android.media.MediaCodecList
 import android.net.Uri
+import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import androidx.core.content.FileProvider
@@ -241,15 +242,10 @@ class HeicConverterRepository(private val context: Context) {
       return Triple(ReplacementStatus.CREATED_COPY_ONLY, null, "无法写入替换文件，已清理未完成文件并保留 HEIC 副本。")
     }
 
-    return try {
-      val deleted = contentResolver.delete(item.uri, null, null)
-      if (deleted > 0) {
-        Triple(ReplacementStatus.REPLACED, targetUri, "已创建 HEIC 并删除原图。")
-      } else {
-        Triple(ReplacementStatus.CREATED_COPY_ONLY, targetUri, "已创建 HEIC，但系统没有删除原图。")
-      }
-    } catch (_: SecurityException) {
-      Triple(ReplacementStatus.CREATED_COPY_ONLY, targetUri, "已创建 HEIC，但系统权限不足，未删除原图。")
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+      Triple(ReplacementStatus.PENDING_TRASH, targetUri, "已创建 HEIC，稍后由系统确认将原图移入回收站。")
+    } else {
+      Triple(ReplacementStatus.CREATED_COPY_ONLY, targetUri, "已创建 HEIC；当前系统不支持媒体回收站，原图已保留。")
     }
   }
 
