@@ -132,18 +132,24 @@ class HeicConverterRepository(private val context: Context) {
         put(MediaStore.MediaColumns.IS_PENDING, 1)
       }
 
-    val targetUri =
-      contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
-        ?: throw IOException("无法创建系统相册目标文件")
+    var targetUri: Uri? = null
+    try {
+      targetUri =
+        contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+          ?: throw IOException("无法创建系统相册目标文件")
 
-    contentResolver.openOutputStream(targetUri)?.use { stream ->
-      output.file.inputStream().use { input -> input.copyTo(stream) }
-    } ?: throw IOException("无法写入系统相册")
+      contentResolver.openOutputStream(targetUri)?.use { stream ->
+        output.file.inputStream().use { input -> input.copyTo(stream) }
+      } ?: throw IOException("无法写入系统相册")
 
-    values.clear()
-    values.put(MediaStore.MediaColumns.IS_PENDING, 0)
-    contentResolver.update(targetUri, values, null, null)
-    targetUri
+      values.clear()
+      values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+      contentResolver.update(targetUri, values, null, null)
+      targetUri
+    } catch (throwable: Throwable) {
+      targetUri?.let(::deleteQuietly)
+      throw throwable
+    }
   }
 
   private fun convertSingle(item: InputImage, settings: ConversionSettings): ConversionItemResult.Success {
@@ -202,13 +208,18 @@ class HeicConverterRepository(private val context: Context) {
       contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
         ?: return Triple(ReplacementStatus.CREATED_COPY_ONLY, null, "无法创建替换文件，已保留 HEIC 副本。")
 
-    contentResolver.openOutputStream(targetUri)?.use { stream ->
-      outputFile.inputStream().use { input -> input.copyTo(stream) }
-    } ?: return Triple(ReplacementStatus.CREATED_COPY_ONLY, targetUri, "无法写入替换文件，已保留 HEIC 副本。")
+    try {
+      contentResolver.openOutputStream(targetUri)?.use { stream ->
+        outputFile.inputStream().use { input -> input.copyTo(stream) }
+      } ?: throw IOException("无法写入替换文件")
 
-    values.clear()
-    values.put(MediaStore.MediaColumns.IS_PENDING, 0)
-    contentResolver.update(targetUri, values, null, null)
+      values.clear()
+      values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+      contentResolver.update(targetUri, values, null, null)
+    } catch (_: Throwable) {
+      deleteQuietly(targetUri)
+      return Triple(ReplacementStatus.CREATED_COPY_ONLY, null, "无法写入替换文件，已清理未完成文件并保留 HEIC 副本。")
+    }
 
     return try {
       val deleted = contentResolver.delete(item.uri, null, null)
@@ -321,7 +332,9 @@ class HeicConverterRepository(private val context: Context) {
     val xmpHint =
       try {
         contentResolver.openInputStream(uri)?.use { input ->
-          val sample = input.readBytes().decodeToString()
+          val buffer = ByteArray(XMP_SCAN_LIMIT_BYTES)
+          val byteCount = input.read(buffer)
+          val sample = if (byteCount > 0) buffer.decodeToString(endIndex = byteCount) else ""
           when {
             sample.contains("GPano", ignoreCase = true) -> "检测到 GPano 元数据，疑似全景/360 图。"
             sample.contains("equirectangular", ignoreCase = true) -> "检测到 equirectangular 标记，疑似 360 图。"
@@ -333,6 +346,14 @@ class HeicConverterRepository(private val context: Context) {
       }
 
     return xmpHint ?: ratioHint
+  }
+
+  private fun deleteQuietly(uri: Uri) {
+    try {
+      contentResolver.delete(uri, null, null)
+    } catch (_: Throwable) {
+      // Best-effort cleanup only; callers still report the original failure.
+    }
   }
 
   private fun uniqueOutputName(displayName: String, directory: File, prefix: String = ""): String {
@@ -364,6 +385,8 @@ class HeicConverterRepository(private val context: Context) {
   )
 
   companion object {
+    private const val XMP_SCAN_LIMIT_BYTES = 256 * 1024
+
     private val exifKeys =
       listOf(
         ExifInterface.TAG_DATETIME,

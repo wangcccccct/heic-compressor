@@ -255,6 +255,7 @@ class ConverterViewModel(application: Application) : AndroidViewModel(applicatio
     }
     viewModelScope.launch {
       var savedCount = 0
+      var failedCount = 0
       successItems.forEach { result ->
         runCatching { repository.saveToGallery(result) }
           .onSuccess { savedUri ->
@@ -268,12 +269,21 @@ class ConverterViewModel(application: Application) : AndroidViewModel(applicatio
                     } else {
                       it
                     }
-                  },
+                },
               )
             }
           }
+          .onFailure {
+            failedCount += 1
+          }
       }
-      postMessage("已保存 $savedCount / ${successItems.size} 个文件到相册。")
+      postMessage(
+        if (failedCount == 0) {
+          "已保存 $savedCount / ${successItems.size} 个文件到相册。"
+        } else {
+          "已保存 $savedCount / ${successItems.size} 个文件，${failedCount} 个保存失败。"
+        },
+      )
     }
   }
 
