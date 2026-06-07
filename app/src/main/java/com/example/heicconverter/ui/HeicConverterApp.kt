@@ -148,10 +148,10 @@ fun HeicConverterRoute(viewModel: ConverterViewModel) {
             trashLauncher.launch(IntentSenderRequest.Builder(pendingIntent.intentSender).build())
           }
           .onFailure {
-            viewModel.onTrashRequestResult(approved = false)
+            viewModel.onTrashRequestResult(approved = false, message = "系统回收站请求创建失败，原图仍保留。")
           }
       } else {
-        viewModel.onTrashRequestResult(approved = false)
+        viewModel.onTrashRequestResult(approved = false, message = "当前系统不支持媒体回收站，原图仍保留。")
       }
     }
   }

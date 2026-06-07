@@ -31,6 +31,7 @@ class ConverterViewModel(application: Application) : AndroidViewModel(applicatio
   private var conversionJob: Job? = null
   private var previewJob: Job? = null
   private var lastHandledShareKey: String? = null
+  private var activeTrashInputIds: Set<String> = emptySet()
 
   init {
     viewModelScope.launch {
@@ -244,17 +245,14 @@ class ConverterViewModel(application: Application) : AndroidViewModel(applicatio
             val successCount = results.count { it is ConversionItemResult.Success }
             val failureCount = results.count { it is ConversionItemResult.Failure }
             _uiState.update {
-              val trashUris =
+              val waitingForSaveCount =
                 results
                   .filterIsInstance<ConversionItemResult.Success>()
-                  .filter { result -> result.replacementStatus == ReplacementStatus.PENDING_TRASH }
-                  .map { result -> result.input.uri }
-                  .distinctBy { uri -> uri.toString() }
+                  .count { result -> result.replacementStatus == ReplacementStatus.PENDING_TRASH }
               it.copy(
                 screen = AppScreen.RESULTS,
                 results = results,
                 recentSummary = summary ?: it.recentSummary,
-                pendingTrashRequest = trashUris.takeIf { uris -> uris.isNotEmpty() }?.let { uris -> TrashRequest(uris = uris) },
                 progress =
                   it.progress.copy(
                     completed = results.size,
@@ -268,7 +266,7 @@ class ConverterViewModel(application: Application) : AndroidViewModel(applicatio
                     text =
                       when {
                         summary == null -> "本轮没有生成可分享的 HEIC 文件。"
-                        trashUris.isNotEmpty() -> "转换完成，成功 ${successCount} 张；请确认系统回收站请求。"
+                        waitingForSaveCount > 0 -> "转换完成，成功 ${successCount} 张；保存结果后再请求系统回收站。"
                         failureCount == 0 -> "转换完成，成功 ${successCount} 张。"
                         else -> "转换完成：成功 ${successCount}，跳过/失败 ${failureCount}。"
                       },
@@ -290,6 +288,10 @@ class ConverterViewModel(application: Application) : AndroidViewModel(applicatio
   }
 
   fun saveOne(result: ConversionItemResult.Success) {
+    if (result.savedUri != null) {
+      postMessage("这个结果已经保存过了。")
+      return
+    }
     viewModelScope.launch {
       runCatching { repository.saveToGallery(result) }
         .onSuccess { savedUri ->
@@ -303,28 +305,31 @@ class ConverterViewModel(application: Application) : AndroidViewModel(applicatio
                     it
                   }
                 },
-              pendingMessage = UiMessage(text = "已保存到系统相册。"),
             )
           }
+          queueTrashRequestAfterSave(listOf(result), baseMessage = "已保存到系统相册。")
         }
         .onFailure { postMessage(it.message ?: "保存失败") }
     }
   }
 
   fun saveAll() {
-    saveResults(_uiState.value.successResults.filter { it.output != null }, emptyMessage = "没有可保存的结果。")
+    saveResults(_uiState.value.successResults.filter { it.output != null && it.savedUri == null }, emptyMessage = "没有可保存的结果。")
   }
 
   fun clearTrashRequest(request: TrashRequest) {
+    activeTrashInputIds = request.inputIds.toSet()
     _uiState.update { state -> if (state.pendingTrashRequest?.id == request.id) state.copy(pendingTrashRequest = null) else state }
   }
 
-  fun onTrashRequestResult(approved: Boolean) {
+  fun onTrashRequestResult(approved: Boolean, message: String? = null) {
+    val affectedInputIds = activeTrashInputIds
+    activeTrashInputIds = emptySet()
     _uiState.update { state ->
       val updatedResults =
         if (approved) {
           state.results.map { result ->
-            if (result is ConversionItemResult.Success && result.replacementStatus == ReplacementStatus.PENDING_TRASH) {
+            if (result is ConversionItemResult.Success && result.input.id in affectedInputIds && result.replacementStatus == ReplacementStatus.PENDING_TRASH) {
               result.copy(replacementStatus = ReplacementStatus.TRASHED, replacementMessage = "已通过系统回收站移走原图。")
             } else {
               result
@@ -338,10 +343,11 @@ class ConverterViewModel(application: Application) : AndroidViewModel(applicatio
         pendingMessage =
           UiMessage(
             text =
+              message ?:
               if (approved) {
                 "系统已确认，原图已移入回收站。"
               } else {
-                "已取消系统回收站请求，原图仍保留。"
+                "系统回收站请求未完成，原图仍保留。"
               },
           ),
       )
@@ -351,7 +357,7 @@ class ConverterViewModel(application: Application) : AndroidViewModel(applicatio
   fun saveSmallerResults() {
     val smallerResults =
       _uiState.value.successResults.filter {
-        it.output != null && it.originalBytes != null && it.outputBytes < it.originalBytes
+        it.output != null && it.savedUri == null && it.originalBytes != null && it.outputBytes < it.originalBytes
       }
     saveResults(smallerResults, emptyMessage = "没有比原图更小的可保存结果。")
   }
@@ -364,10 +370,12 @@ class ConverterViewModel(application: Application) : AndroidViewModel(applicatio
     viewModelScope.launch {
       var savedCount = 0
       var failedCount = 0
+      val savedItems = mutableListOf<ConversionItemResult.Success>()
       successItems.forEach { result ->
         runCatching { repository.saveToGallery(result) }
           .onSuccess { savedUri ->
             savedCount += 1
+            savedItems += result
             _uiState.update { state ->
               state.copy(
                 results =
@@ -385,12 +393,37 @@ class ConverterViewModel(application: Application) : AndroidViewModel(applicatio
             failedCount += 1
           }
       }
-      postMessage(
+      val message =
         if (failedCount == 0) {
           "已保存 $savedCount / ${successItems.size} 个文件到相册。"
         } else {
           "已保存 $savedCount / ${successItems.size} 个文件，${failedCount} 个保存失败。"
-        },
+        }
+      queueTrashRequestAfterSave(savedItems, baseMessage = message)
+    }
+  }
+
+  private fun queueTrashRequestAfterSave(savedItems: List<ConversionItemResult.Success>, baseMessage: String) {
+    val replaceCandidates = savedItems.filter { it.replacementStatus == ReplacementStatus.PENDING_TRASH }
+    if (replaceCandidates.isEmpty()) {
+      postMessage(baseMessage)
+      return
+    }
+
+    val trashUris = replaceCandidates.mapNotNull { it.input.trashUri }.distinctBy { it.toString() }
+    if (trashUris.isEmpty()) {
+      postMessage("$baseMessage 但无法定位系统相册原图，原图仍保留。")
+      return
+    }
+
+    _uiState.update {
+      it.copy(
+        pendingTrashRequest =
+          TrashRequest(
+            uris = trashUris,
+            inputIds = replaceCandidates.map { result -> result.input.id },
+          ),
+        pendingMessage = UiMessage(text = "$baseMessage 请确认系统回收站请求。"),
       )
     }
   }

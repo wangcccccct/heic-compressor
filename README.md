@@ -36,7 +36,7 @@
 ## 项目信息
 
 - 包名：`com.example.heicconverter`
-- 当前版本：`0.2.5`
+- 当前版本：`0.2.6`
 - 技术栈：Kotlin、Jetpack Compose、Material 3、AndroidX HeifWriter
 
 ## 注意

@@ -29,6 +29,7 @@ data class ConversionSettings(
 data class InputImage(
   val id: String,
   val uri: Uri,
+  val trashUri: Uri? = null,
   val displayName: String,
   val mimeType: String,
   val sizeBytes: Long?,
@@ -116,6 +117,7 @@ data class UiMessage(
 data class TrashRequest(
   val id: Long = System.currentTimeMillis(),
   val uris: List<Uri>,
+  val inputIds: List<String>,
 )
 
 data class PreviewComparison(

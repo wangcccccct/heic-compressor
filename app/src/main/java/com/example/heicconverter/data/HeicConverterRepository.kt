@@ -1,6 +1,7 @@
 package com.example.heicconverter.data
 
 import android.content.ContentResolver
+import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
 import android.graphics.Bitmap
@@ -8,7 +9,6 @@ import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
 import android.media.MediaCodecList
 import android.net.Uri
-import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import androidx.core.content.FileProvider
@@ -78,6 +78,7 @@ class HeicConverterRepository(private val context: Context) {
         InputImage(
           id = uri.toString(),
           uri = uri,
+          trashUri = metadata.mediaStoreUri,
           displayName = displayName,
           mimeType = mimeType.ifBlank { "unknown" },
           sizeBytes = metadata.size,
@@ -195,10 +196,13 @@ class HeicConverterRepository(private val context: Context) {
           output = null
         }
       } else {
-        val replacement = createReplacement(item, outputFile)
-        replacementStatus = replacement.first
-        replacementUri = replacement.second
-        replacementMessage = replacement.third
+        replacementStatus = ReplacementStatus.PENDING_TRASH
+        replacementMessage =
+          if (item.trashUri == null) {
+            "已生成 HEIC；当前来源无法定位系统相册原图，保存后也可能无法移入回收站。"
+          } else {
+            "已生成 HEIC；保存结果后可请求系统将原图移入回收站。"
+          }
       }
     }
 
@@ -212,41 +216,6 @@ class HeicConverterRepository(private val context: Context) {
       replacementUri = replacementUri,
       replacementMessage = replacementMessage,
     )
-  }
-
-  private fun createReplacement(item: InputImage, outputFile: File): Triple<ReplacementStatus, Uri?, String?> {
-    val metadata = queryInputMetadata(item.uri)
-    val values =
-      ContentValues().apply {
-        put(MediaStore.MediaColumns.DISPLAY_NAME, outputNameFor(item.displayName))
-        put(MediaStore.MediaColumns.MIME_TYPE, "image/heic")
-        put(MediaStore.MediaColumns.RELATIVE_PATH, metadata.relativePath ?: Environment.DIRECTORY_PICTURES + "/HEIC Converter")
-        put(MediaStore.MediaColumns.IS_PENDING, 1)
-        metadata.dateTaken?.let { put(MediaStore.Images.Media.DATE_TAKEN, it) }
-      }
-
-    val targetUri =
-      contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
-        ?: return Triple(ReplacementStatus.CREATED_COPY_ONLY, null, "无法创建替换文件，已保留 HEIC 副本。")
-
-    try {
-      contentResolver.openOutputStream(targetUri)?.use { stream ->
-        outputFile.inputStream().use { input -> input.copyTo(stream) }
-      } ?: throw IOException("无法写入替换文件")
-
-      values.clear()
-      values.put(MediaStore.MediaColumns.IS_PENDING, 0)
-      contentResolver.update(targetUri, values, null, null)
-    } catch (_: Throwable) {
-      deleteQuietly(targetUri)
-      return Triple(ReplacementStatus.CREATED_COPY_ONLY, null, "无法写入替换文件，已清理未完成文件并保留 HEIC 副本。")
-    }
-
-    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-      Triple(ReplacementStatus.PENDING_TRASH, targetUri, "已创建 HEIC，稍后由系统确认将原图移入回收站。")
-    } else {
-      Triple(ReplacementStatus.CREATED_COPY_ONLY, targetUri, "已创建 HEIC；当前系统不支持媒体回收站，原图已保留。")
-    }
   }
 
   private fun encodeHeic(item: InputImage, settings: ConversionSettings, outputFile: File): MetadataStatus {
@@ -305,6 +274,7 @@ class HeicConverterRepository(private val context: Context) {
   private fun queryInputMetadata(uri: Uri): SourceMetadata {
     val projection =
       arrayOf(
+        MediaStore.MediaColumns._ID,
         MediaStore.MediaColumns.DISPLAY_NAME,
         MediaStore.MediaColumns.SIZE,
         MediaStore.MediaColumns.WIDTH,
@@ -312,17 +282,22 @@ class HeicConverterRepository(private val context: Context) {
         MediaStore.MediaColumns.RELATIVE_PATH,
         MediaStore.Images.Media.DATE_TAKEN,
       )
-    val queried = contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
-      if (!cursor.moveToFirst()) return@use SourceMetadata()
-      SourceMetadata(
-        displayName = cursor.getStringOrNull(0),
-        size = cursor.getLongOrNull(1),
-        width = cursor.getIntOrNull(2),
-        height = cursor.getIntOrNull(3),
-        relativePath = cursor.getStringOrNull(4),
-        dateTaken = cursor.getLongOrNull(5),
-      )
-    } ?: SourceMetadata()
+    val queried =
+      runCatching {
+        contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
+          if (!cursor.moveToFirst()) return@use SourceMetadata()
+          val mediaId = cursor.getLongOrNull(0)
+          SourceMetadata(
+            mediaStoreUri = mediaId?.let { ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, it) },
+            displayName = cursor.getStringOrNull(1),
+            size = cursor.getLongOrNull(2),
+            width = cursor.getIntOrNull(3),
+            height = cursor.getIntOrNull(4),
+            relativePath = cursor.getStringOrNull(5),
+            dateTaken = cursor.getLongOrNull(6),
+          )
+        }
+      }.getOrNull() ?: SourceMetadata()
 
     if (queried.width != null && queried.height != null) return queried
 
@@ -420,6 +395,7 @@ class HeicConverterRepository(private val context: Context) {
   private fun android.database.Cursor.getIntOrNull(index: Int): Int? = if (isNull(index)) null else getInt(index)
 
   private data class SourceMetadata(
+    val mediaStoreUri: Uri? = null,
     val displayName: String? = null,
     val size: Long? = null,
     val width: Int? = null,
